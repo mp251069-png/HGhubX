@@ -286,9 +286,19 @@ pub async fn load_segment(url: &str) -> Result<(Option<String>, Arc<Vec<u8>>), S
     let len = bytes.len();
     let arc = Arc::new(bytes);
     if len <= 65536 {
-        cache_put(&KEY_CACHE, url.to_string(), (mime.clone(), arc.clone()), KEY_CACHE_MAX);
+        cache_put(
+            &KEY_CACHE,
+            url.to_string(),
+            (mime.clone(), arc.clone()),
+            KEY_CACHE_MAX,
+        );
     } else if len <= SEG_CACHE_MAX_BYTES {
-        cache_put(&SEG_CACHE, url.to_string(), (mime.clone(), arc.clone()), SEG_CACHE_MAX);
+        cache_put(
+            &SEG_CACHE,
+            url.to_string(),
+            (mime.clone(), arc.clone()),
+            SEG_CACHE_MAX,
+        );
     }
     Ok((Some(mime), arc))
 }
@@ -319,11 +329,73 @@ fn respond(status: u16, ctype: &str, body: Vec<u8>, cache: &str) -> Response<Vec
         // WKWebView 需要 Content-Length / Accept-Ranges 才肯复用已缓冲的分片
         .header("Content-Length", len)
         .header("Accept-Ranges", "bytes")
-        .header("Access-Control-Expose-Headers", "Content-Length, Content-Type, Accept-Ranges")
+        .header(
+            "Access-Control-Expose-Headers",
+            "Content-Length, Content-Type, Accept-Ranges, Content-Range",
+        )
         .header("X-Content-Type-Options", "nosniff")
         .header("Cache-Control", cache)
         .body(body)
         .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+/// Honor a single byte range requested by native media stacks such as AVFoundation.
+/// Resources are fetched and cached as whole objects, then sliced for the local response.
+fn apply_byte_range(response: Response<Vec<u8>>, range: Option<&str>) -> Response<Vec<u8>> {
+    if response.status() != StatusCode::OK {
+        return response;
+    }
+    let Some(range) = range.map(str::trim).filter(|value| !value.is_empty()) else {
+        return response;
+    };
+    let Some(spec) = range.strip_prefix("bytes=") else {
+        return response;
+    };
+    // Multipart ranges are not needed for HLS playback; ignore them and return the full object.
+    if spec.contains(',') {
+        return response;
+    }
+    let Some((first, last)) = spec.split_once('-') else {
+        return response;
+    };
+    let (mut parts, body) = response.into_parts();
+    let total = body.len() as u64;
+    let parsed = if first.is_empty() {
+        last.parse::<u64>().ok().and_then(|suffix| {
+            (suffix > 0 && total > 0).then(|| (total.saturating_sub(suffix), total - 1))
+        })
+    } else {
+        first.parse::<u64>().ok().and_then(|start| {
+            if total == 0 || start >= total {
+                None
+            } else {
+                let end = if last.is_empty() {
+                    total - 1
+                } else {
+                    last.parse::<u64>().ok()?.min(total - 1)
+                };
+                (end >= start).then_some((start, end))
+            }
+        })
+    };
+    let Some((start, end)) = parsed else {
+        parts.status = StatusCode::RANGE_NOT_SATISFIABLE;
+        parts
+            .headers
+            .insert("Content-Range", format!("bytes */{total}").parse().unwrap());
+        parts.headers.insert("Content-Length", "0".parse().unwrap());
+        return Response::from_parts(parts, Vec::new());
+    };
+    let body = body[start as usize..=end as usize].to_vec();
+    parts.status = StatusCode::PARTIAL_CONTENT;
+    parts.headers.insert(
+        "Content-Range",
+        format!("bytes {start}-{end}/{total}").parse().unwrap(),
+    );
+    parts
+        .headers
+        .insert("Content-Length", body.len().to_string().parse().unwrap());
+    Response::from_parts(parts, body)
 }
 
 /// 主清单的子清单也经 /seg 返回：必须继续改写，不能把内层 URL 原样交给播放器。
@@ -365,7 +437,12 @@ fn segment_response(
 ///
 /// `origin` 是本平台自定义协议的完整基址，见 [`LOCAL_ORIGIN`]；用于改写 m3u8 里的
 /// 分片与 key 地址。正常情况下调用方直接传 [`LOCAL_ORIGIN`]。
-pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> {
+pub async fn handle(
+    path: &str,
+    query: &str,
+    origin: &str,
+    range: Option<&str>,
+) -> Response<Vec<u8>> {
     let target = query
         .split('&')
         .find_map(|kv| kv.strip_prefix("u="))
@@ -387,28 +464,33 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
         "proxy.begin",
         serde_json::json!({"route": route, "resource": crate::playback_log::resource_id(&target)}),
     );
-    let response = match path {
-        "/img" => match load_image(&target).await {
-            Ok((kind, bytes)) => {
-                respond(200, &kind, bytes.as_ref().clone(), "public, max-age=86400")
-            }
-            Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
+    let response = apply_byte_range(
+        match path {
+            "/img" => match load_image(&target).await {
+                Ok((kind, bytes)) => {
+                    respond(200, &kind, bytes.as_ref().clone(), "public, max-age=86400")
+                }
+                Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
+            },
+            "/hls" => match load_playlist(&target, origin).await {
+                Ok(text) => respond(
+                    200,
+                    "application/vnd.apple.mpegurl",
+                    text.as_bytes().to_vec(),
+                    "no-store",
+                ),
+                Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
+            },
+            "/seg" => match load_segment(&target).await {
+                Ok((ctype, bytes)) => {
+                    segment_response(&target, ctype.as_deref(), bytes.as_ref().clone(), origin)
+                }
+                Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
+            },
+            _ => respond(404, "text/plain", b"not found".to_vec(), "no-store"),
         },
-        "/hls" => match load_playlist(&target, origin).await {
-            Ok(text) => respond(
-                200,
-                "application/vnd.apple.mpegurl",
-                text.as_bytes().to_vec(),
-                "no-store",
-            ),
-            Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
-        },
-        "/seg" => match load_segment(&target).await {
-            Ok((ctype, bytes)) => segment_response(&target, ctype.as_deref(), bytes.as_ref().clone(), origin),
-            Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
-        },
-        _ => respond(404, "text/plain", b"not found".to_vec(), "no-store"),
-    };
+        range,
+    );
     crate::playback_log::record(
         "proxy.end",
         serde_json::json!({"route": route, "resource": crate::playback_log::resource_id(&target), "status": response.status().as_u16(), "bytes": response.body().len(), "elapsed_ms": started.elapsed().as_millis() as u64}),
@@ -478,6 +560,45 @@ mod tests {
         assert!(bom.body().starts_with(b"#EXTM3U\n"));
     }
 
+    #[test]
+    fn byte_ranges_return_partial_content_and_correct_headers() {
+        let response = respond(200, "video/mp2t", b"0123456789".to_vec(), "no-store");
+        let ranged = apply_byte_range(response, Some("bytes=2-5"));
+        assert_eq!(ranged.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(ranged.headers()["Content-Range"], "bytes 2-5/10");
+        assert_eq!(ranged.headers()["Content-Length"], "4");
+        assert_eq!(ranged.headers()["Accept-Ranges"], "bytes");
+        assert!(ranged.headers()["Access-Control-Expose-Headers"]
+            .to_str()
+            .unwrap()
+            .contains("Content-Range"));
+        assert_eq!(ranged.body(), b"2345");
+
+        let manifest = b"#EXTM3U\n#EXTINF:4,\nsegment.ts\n".to_vec();
+        let probe = apply_byte_range(
+            respond(200, "application/vnd.apple.mpegurl", manifest, "no-store"),
+            Some("bytes=0-7"),
+        );
+        assert_eq!(probe.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(probe.body(), b"#EXTM3U\n");
+
+        let suffix = apply_byte_range(
+            respond(200, "video/mp2t", b"0123456789".to_vec(), "no-store"),
+            Some("bytes=-3"),
+        );
+        assert_eq!(suffix.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(suffix.headers()["Content-Range"], "bytes 7-9/10");
+        assert_eq!(suffix.body(), b"789");
+
+        let unsatisfiable = apply_byte_range(
+            respond(200, "video/mp2t", b"0123456789".to_vec(), "no-store"),
+            Some("bytes=10-"),
+        );
+        assert_eq!(unsatisfiable.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(unsatisfiable.headers()["Content-Range"], "bytes */10");
+        assert!(unsatisfiable.body().is_empty());
+    }
+
     /// 联网测试：默认跳过，手动跑 `cargo test --lib -- --ignored`。
     /// 依赖上游 `/api/videos/117/play` 返回的实时播放地址。
     #[tokio::test]
@@ -503,7 +624,7 @@ mod tests {
             &text[..text.len().min(160)]
         );
         let q = format!("u={}", enc(&url));
-        let resp = handle("/hls", &q, LOCAL_ORIGIN).await;
+        let resp = handle("/hls", &q, LOCAL_ORIGIN, None).await;
         let body = String::from_utf8_lossy(resp.body()).to_string();
         println!("proxied status={} len={}", resp.status(), body.len());
         assert!(body.contains("#EXTM3U"));
@@ -515,7 +636,7 @@ mod tests {
             .to_string();
         println!("seg line: {}", &seg_line[..seg_line.len().min(120)]);
         let seg_q = seg_line.split("?u=").nth(1).unwrap();
-        let seg = handle("/seg", &format!("u={seg_q}"), LOCAL_ORIGIN).await;
+        let seg = handle("/seg", &format!("u={seg_q}"), LOCAL_ORIGIN, None).await;
         println!("segment status={} len={}", seg.status(), seg.body().len());
         assert_eq!(seg.status(), 200);
         assert!(seg.body().len() > 1000);
@@ -536,7 +657,9 @@ mod tests {
         );
         // 分片必须绝对化到源站，并保留签名查询串。
         assert!(
-            body.contains("https%3A%2F%2Fcdn%2Eexample%2Fvideos5%2Fabc%2Fseg%2D1%2Ets%3Fauth%5Fkey%3D"),
+            body.contains(
+                "https%3A%2F%2Fcdn%2Eexample%2Fvideos5%2Fabc%2Fseg%2D1%2Ets%3Fauth%5Fkey%3D"
+            ),
             "segment not absolutized with query: {body}"
         );
         // 加密 KEY 也要走本地代理，否则 hls.js 会直接打源站被 CORS 拦住。

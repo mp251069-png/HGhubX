@@ -118,12 +118,17 @@ pub fn run() {
                 .get("Origin")
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
+            let request_range = request
+                .headers()
+                .get("Range")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
             if playback_log::enabled() {
                 let resource = url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
                     .find(|(key, _)| key == "u")
                     .map(|(_, value)| playback_log::resource_id(&value));
                 let route = match request.uri().path() { "/hls" => "playlist", "/seg" => "segment_or_key", "/img" => "image", _ => "unknown" };
-                let range = request.headers().get("Range").and_then(|v| v.to_str().ok())
+                let range = request_range.as_deref()
                     .filter(|v| v.len() <= 100 && v.bytes().all(|b| b.is_ascii_digit() || b"bytes=,- ".contains(&b)));
                 let origin_kind = match request_origin.as_deref() { None => "missing", Some("null") => "null", Some(origin) if allowed_frontend_origin(origin) => "app", _ => "other" };
                 playback_log::record("protocol.request", serde_json::json!({"resource": resource, "route": route, "method": request.method().as_str(), "range": range, "origin_kind": origin_kind}));
@@ -154,7 +159,7 @@ pub fn run() {
             // （Windows/Android 是 http://<scheme>.localhost，macOS/iOS/Linux 是 <scheme>://localhost）。
             // 它同时是 m3u8 分片/key 改写用的前缀，必须与前端 src/api.ts 的 LOCAL 一致。
             tauri::async_runtime::spawn(async move {
-                let mut resp = media::handle(&path, &query, media::LOCAL_ORIGIN).await;
+                let mut resp = media::handle(&path, &query, media::LOCAL_ORIGIN, request_range.as_deref()).await;
                 if let Some(origin) =
                     request_origin.and_then(|s| tauri::http::HeaderValue::from_str(&s).ok())
                 {
