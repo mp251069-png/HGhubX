@@ -111,6 +111,35 @@ pub async fn line_reset(state: State<'_, Api>) -> Result<Value, String> {
     Ok(json!({ "base": applied, "custom": crate::net::is_custom_line() }))
 }
 
+/// 代理访问的当前状态（模式 + 脱敏后的出口 + 系统代理是否启用）。
+#[tauri::command]
+pub async fn proxy_state() -> Result<Value, String> {
+    Ok(crate::net::proxy_state())
+}
+
+/// 保存代理设置：`mode` 为 `system` / `custom` / `off`，`url` 仅 `custom` 时必填。
+#[tauri::command]
+pub async fn proxy_set(mode: String, url: String) -> Result<Value, String> {
+    crate::proxy::set(&mode, &url)?;
+    // 代理换了，缓存里按旧代理建好的客户端必须全部作废。
+    crate::net::refresh_client();
+    let state = crate::net::proxy_state();
+    crate::playback_log::record(
+        "proxy.changed",
+        json!({
+            "mode": state.get("mode").cloned().unwrap_or(Value::Null),
+            "proxy": state.get("effective").cloned().unwrap_or(Value::Null),
+        }),
+    );
+    Ok(state)
+}
+
+/// 试一条代理：返回能否把请求送到当前线路（探的是真接口，不是首页）。
+#[tauri::command]
+pub async fn proxy_test(mode: String, url: String) -> Result<Value, String> {
+    Ok(crate::net::test_proxy(&mode, &url).await)
+}
+
 /// 从地址发布页抓镜像线路（只在用户点开「线路」时调用）。
 #[tauri::command]
 pub async fn line_mirrors() -> Result<Value, String> {

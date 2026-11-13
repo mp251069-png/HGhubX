@@ -1,11 +1,15 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, APP_VERSION, hostOf, logLine, platform, type LineProbe, type LineState, type UpdateInfo } from "../api";
+import { api, APP_VERSION, hostOf, logLine, platform, type LineProbe, type LineState, type ProxyMode, type ProxyProbe, type ProxyState, type UpdateInfo } from "../api";
 import { useStore } from "../store";
 import { Modal, Toggle } from "../components/ui";
 import { copyPlaybackLog, initPlaybackLog, setPlaybackLog, tracePlayback, usePlaybackLog } from "../playbackDiagnostics";
 import { formatNetDiag, shortVerdict } from "../netDiagReport";
 import { copyText } from "../clipboard";
 import { IBack, IBoltF, IBroom, IChevR, IGlobe, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISettings, ISun, IVolMute } from "../icons";
+
+/* 三种代理模式在设置页里的叫法（顺序即分段控件的顺序） */
+const PROXY_MODES: ProxyMode[] = ["system", "custom", "off"];
+const PROXY_LABEL: Record<ProxyMode, string> = { system: "跟随系统", custom: "自定义", off: "直连" };
 
 /** 检测结果一行：可用 / 不可用 / 未检测。两个弹窗共用，避免两套措辞。 */
 function ProbeLine({ probe, busy, idle }: {
@@ -20,6 +24,15 @@ function ProbeLine({ probe, busy, idle }: {
         ? `可用 · ${probe.ms}ms`
         : probe.status ? `不可用 · HTTP ${probe.status}` : `不可用 · ${probe.error || "连接失败"}`;
   return <div className={`text-[10.5px] mt-2 break-all leading-relaxed ${tone}`}>{text}</div>;
+}
+
+/** 代理状态的展示文案：优先说「实际走哪」，其次说「为什么没走」。 */
+function proxySummary(p: ProxyState | null): string {
+  if (!p) return "读取中…";
+  if (p.mode === "custom") return p.effective ? `自定义 · ${p.effective}` : "自定义代理（地址未填写）";
+  if (p.mode === "off") return "强制直连，忽略系统代理与环境变量";
+  if (p.effective) return `跟随系统 · ${p.effective}`;
+  return p.system_proxy ? "跟随系统 · 已检测到系统代理" : "跟随系统 · 未检测到系统代理";
 }
 
 /* 独立设置页：线路 / 外观 / 播放 / 本地数据 / 清理缓存 / 网络诊断 / 关于
@@ -45,12 +58,22 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
   const [lineInput, setLineInput] = useState("");
   const [lineProbe, setLineProbe] = useState<LineProbe | null>(null);
   const [lineBusy, setLineBusy] = useState<"" | "test" | "save" | "reset">("");
+  /* 代理访问 */
+  const [proxy, setProxy] = useState<ProxyState | null>(null);
+  const [proxyOpen, setProxyOpen] = useState(false);
+  const [proxyMode, setProxyMode] = useState<ProxyMode>("system");
+  const [proxyInput, setProxyInput] = useState("");
+  const [proxyProbe, setProxyProbe] = useState<ProxyProbe | null>(null);
+  const [proxyBusy, setProxyBusy] = useState<"" | "test" | "save">("");
 
   useEffect(() => { void initPlaybackLog(); }, []);
 
-  /* 线路状态来自后端（落盘在应用数据目录），进页面读一次即可 */
+  /* 线路与代理状态都来自后端（落盘在应用数据目录），进页面读一次即可 */
   useEffect(() => {
     api.lineState().then(setLine).catch(() => { /* 离线也能用，保持「读取中」 */ });
+    api.proxyState()
+      .then((s) => { setProxy(s); setProxyMode(s.mode); setProxyInput(s.url || ""); })
+      .catch(() => { /* 同上 */ });
   }, []);
 
   const openLine = () => {
@@ -110,6 +133,47 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
       toast((e as Error).message || "恢复默认线路失败", "info");
     } finally {
       setLineBusy("");
+    }
+  };
+
+  const openProxy = () => {
+    setProxyMode(proxy?.mode ?? "system");
+    setProxyInput(proxy?.url || "");
+    setProxyProbe(null);
+    setProxyOpen(true);
+  };
+
+  const testProxy = async () => {
+    setProxyBusy("test");
+    setProxyProbe(null);
+    try {
+      setProxyProbe(await api.proxyTest(proxyMode, proxyMode === "custom" ? proxyInput.trim() : ""));
+    } catch (e) {
+      setProxyProbe({ ok: false, ms: 0, error: (e as Error).message || "检测失败" });
+    } finally {
+      setProxyBusy("");
+    }
+  };
+
+  const saveProxy = async () => {
+    if (proxyMode === "custom" && !proxyInput.trim()) {
+      toast("请填写代理地址", "info");
+      return;
+    }
+    setProxyBusy("save");
+    try {
+      const next = await api.proxySet(proxyMode, proxyInput.trim());
+      setProxy(next);
+      setProxyMode(next.mode);
+      setProxyInput(next.url || "");
+      setProxyOpen(false);
+      toast(proxyMode === "custom" ? "已启用自定义代理" : proxyMode === "off" ? "已切换为直连" : "已跟随系统代理", "ok");
+      // 代理换了等于链路换了：让列表页重新拉一遍，顺便验证新出口是否可用
+      window.dispatchEvent(new Event("hg:line-changed"));
+    } catch (e) {
+      toast((e as Error).message || "代理设置保存失败", "info");
+    } finally {
+      setProxyBusy("");
     }
   };
 
@@ -229,6 +293,15 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
                 </div>
               </div>
               <span className={`text-[10.5px] shrink-0 ${line?.custom ? "text-primary" : "text-mint"}`}>{line ? (line.custom ? "自定义" : "默认") : "—"}</span>
+              <IChevR size={15} className="text-mut" />
+            </button>
+            <button onClick={openProxy} className="w-full flex items-center gap-3 px-3.5 py-3 text-left pressable">
+              <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><ILink size={16} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] text-on">代理访问</div>
+                <div className="text-[10.5px] text-mut truncate">{proxySummary(proxy)}</div>
+              </div>
+              <span className="text-[10.5px] text-primary shrink-0">{PROXY_LABEL[proxy?.mode ?? "system"]}</span>
               <IChevR size={15} className="text-mut" />
             </button>
           </Section>
@@ -380,6 +453,57 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
             <button onClick={() => void applyLine()} disabled={!!lineBusy || !lineInput.trim()}
               className="h-9 px-4 rounded-(--r-ctl) bg-primary text-[12px] font-semibold text-on-primary pressable disabled:opacity-60">
               {lineBusy === "save" ? "应用中…" : "保存并应用"}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={proxyOpen} onClose={() => setProxyOpen(false)} width={430}>
+        <div className="p-5">
+          <div className="text-[14.5px] font-bold text-on">代理访问</div>
+          <p className="text-[11.5px] text-mut leading-relaxed mt-1.5">
+            客户端请求由本进程直发，不读浏览器的代理设置，移动端也读不到系统 Wi-Fi 代理。
+            需要走代理时在这里显式指定一条：支持 http / https / socks5，可带账号密码。
+          </p>
+
+          <div className="mt-3 grid grid-cols-3 gap-1 rounded-(--r-sm) bg-s4 p-1" role="group" aria-label="代理模式">
+            {PROXY_MODES.map((m) => (
+              <button key={m} onClick={() => { setProxyMode(m); setProxyProbe(null); }}
+                aria-pressed={proxyMode === m}
+                className={`h-8 rounded-[8px] text-[11.5px] pressable ${proxyMode === m ? "bg-primary text-on-primary font-semibold" : "text-on/70"}`}>
+                {PROXY_LABEL[m]}
+              </button>
+            ))}
+          </div>
+
+          <input
+            value={proxyInput}
+            onChange={(e) => { setProxyInput(e.target.value); setProxyProbe(null); }}
+            placeholder="http://127.0.0.1:7897"
+            disabled={proxyMode !== "custom"}
+            inputMode="url" spellCheck={false} autoCapitalize="none" autoCorrect="off"
+            aria-label="代理地址"
+            className="w-full mt-3 h-10 px-3 rounded-(--r-sm) bg-s4 text-[12.5px] text-on placeholder-mut outline-none focus:ring-2 focus:ring-[var(--p-primary)] disabled:opacity-50"
+          />
+          <div className="text-[10px] text-dim mt-1.5 leading-relaxed">
+            {proxyMode === "custom"
+              ? "省略协议按 http 处理；例：127.0.0.1:7897 或 socks5://127.0.0.1:1080"
+              : proxyMode === "off"
+                ? "强制直连：忽略系统代理与 HTTP(S)_PROXY 环境变量"
+                : `沿用操作系统或环境变量里的代理${proxy?.system_proxy ? "（已检测到系统代理）" : "（当前未检测到）"}`}
+          </div>
+          <ProbeLine probe={proxyProbe} busy={proxyBusy === "test"} idle="点击「检测」用当前线路试一次请求" />
+          <div className="flex items-center gap-2 mt-4">
+            <button onClick={() => void testProxy()} disabled={!!proxyBusy || (proxyMode === "custom" && !proxyInput.trim())}
+              className="h-9 px-3 rounded-(--r-ctl) bg-s4 text-[12px] text-on/80 pressable disabled:opacity-50">
+              {proxyBusy === "test" ? "检测中…" : "检测"}
+            </button>
+            <div className="flex-1" />
+            <button onClick={() => setProxyOpen(false)} disabled={!!proxyBusy}
+              className="h-9 px-3 rounded-(--r-ctl) bg-s4 text-[12px] text-on/80 pressable disabled:opacity-50">取消</button>
+            <button onClick={() => void saveProxy()} disabled={!!proxyBusy || (proxyMode === "custom" && !proxyInput.trim())}
+              className="h-9 px-4 rounded-(--r-ctl) bg-primary text-[12px] font-semibold text-on-primary pressable disabled:opacity-60">
+              {proxyBusy === "save" ? "保存中…" : "保存"}
             </button>
           </div>
         </div>

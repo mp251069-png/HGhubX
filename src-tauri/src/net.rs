@@ -20,6 +20,9 @@
 //! 进程里的 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 由 reqwest `system-proxy` 读取；
 //! Linux 桌面还会读 GNOME 的 `gsettings` 手动代理（http/socks），无需用户手动设置。
 //! `net_diag` 命令会输出 DNS/HTTP/环境变量与探测到的代理（脱敏）快照。
+//!
+//! 应用内代理（设置 → 线路设置 → 代理访问）见 `proxy.rs`：它优先于系统代理与
+//! 环境变量，并可在移动端生效——那里根本没有可读的系统代理配置。
 
 use crate::network_policy;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -89,6 +92,7 @@ pub fn trusted_auth_origin(origin: &str) -> bool {
 /// 文件缺失、损坏或地址已不合法时同样退回官方主站，不让坏配置锁死启动。
 pub fn bind_base(dir: &std::path::Path) {
     network_policy::bind_security(dir);
+    crate::proxy::bind(dir);
     let path = dir.join("line.json");
     let mut restored = DEFAULT_BASE.to_string();
     let mut legacy = false;
@@ -167,9 +171,20 @@ fn env_proxy_set() -> bool {
         .any(|key| std::env::var(key).ok().is_some_and(|v| !v.trim().is_empty()))
 }
 
+/// 设置页里的「代理访问」是否被用户设成强制直连。
+fn proxy_off() -> bool {
+    crate::proxy::mode() == crate::proxy::Mode::Off
+}
+
 /// 应用层最终采用的显式代理（不含环境变量——那部分交给 reqwest）。
-/// 优先级：`HGHUB_PROXY` > 进程环境变量（reqwest 处理）> Linux GNOME gsettings。
+/// 优先级：设置页自定义代理 > `HGHUB_PROXY` > 进程环境变量（reqwest 处理）> Linux GNOME gsettings。
 fn detected_proxy() -> Option<String> {
+    if proxy_off() {
+        return None;
+    }
+    if let Some(p) = crate::proxy::custom_url() {
+        return Some(p);
+    }
     if let Some(p) = proxy_override() {
         return Some(p);
     }
@@ -291,7 +306,7 @@ fn macos_proxy_enabled() -> bool {
 }
 
 /// 操作系统级系统代理是否已启用（Windows 注册表 / macOS scutil / Linux GNOME），只报 bool。
-fn system_proxy_enabled() -> bool {
+pub fn system_proxy_enabled() -> bool {
     windows_proxy_enabled() || macos_proxy_enabled() || gnome_proxy().is_some()
 }
 
@@ -313,7 +328,10 @@ fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<reqwest::Client, Str
     if !addrs.is_empty() {
         builder = builder.resolve_to_addrs(host, addrs);
     }
-    if let Some(p) = detected_proxy() {
+    if proxy_off() {
+        // 直连模式必须显式关掉，否则 reqwest 仍会按 `system-proxy` 读注册表 / 环境变量。
+        builder = builder.no_proxy();
+    } else if let Some(p) = detected_proxy() {
         // 错误信息不能含原始代理 URL（其中可能有用户名/密码）。
         let proxy = reqwest::Proxy::all(&p).map_err(|_| "代理配置无效（已隐藏原始值）")?;
         builder = builder.proxy(proxy);
@@ -329,6 +347,21 @@ static CLIENTS: Lazy<Mutex<ClientCache>> = Lazy::new(|| Mutex::new(HashMap::new(
 static MEDIA_DNS_ROUTES: Lazy<Mutex<crate::media_dns::Routes>> =
     Lazy::new(|| Mutex::new(crate::media_dns::Routes::default()));
 
+/// 缓存键：模式 / 主机 / 端口 / DNS 策略 / 是否走代理 / 代理配置指纹。
+///
+/// 末尾那一段是必须的：改完代理地址后若沿用同一个键，缓存里那个「按旧代理建好」的
+/// 客户端还会被复用最多 30s，用户看到的就是「保存成功但没生效」。
+fn client_key(strict: bool, host: &str, port: u16, public_dns: bool, proxy: bool) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    crate::proxy::mode().as_str().hash(&mut hasher);
+    crate::proxy::stored_url().hash(&mut hasher);
+    format!(
+        "{strict}:{host}:{port}:{public_dns}:{proxy}:{:x}",
+        hasher.finish()
+    )
+}
+
 fn cached_client(cache: &ClientCache, key: &str, now: Instant) -> Option<Arc<reqwest::Client>> {
     cache
         .get(key)
@@ -342,10 +375,15 @@ async fn client_for(raw: &str) -> Result<(url::Url, Arc<reqwest::Client>), Strin
     client_for_dns(raw, false).await
 }
 
-/// 是否处于「有代理」状态：显式代理（`HGHUB_PROXY`）、系统代理（Linux GNOME / Windows 注册表 / macOS scutil）或进程环境变量。
+/// 是否处于「有代理」状态：设置页的自定义代理、显式代理（`HGHUB_PROXY`）、系统代理
+/// （Linux GNOME / Windows 注册表 / macOS scutil）或进程环境变量。`off` 模式一律视为无代理。
 /// 有代理时域名交给代理解析，本地不再做 DNS 固定与 IP 校验（被污染的 DNS 不影响代理链路）。
 fn proxy_active() -> bool {
-    detected_proxy().is_some()
+    if proxy_off() {
+        return false;
+    }
+    crate::proxy::custom_url().is_some()
+        || detected_proxy().is_some()
         || env_proxy_set()
         || windows_proxy_enabled()
         || macos_proxy_enabled()
@@ -357,7 +395,7 @@ async fn client_for_dns(raw: &str, public_dns: bool) -> Result<(url::Url, Arc<re
     let host = target.host_str().ok_or("目标缺少主机名")?;
     let port = target.port_or_known_default().ok_or("目标端口无效")?;
     let proxy = proxy_active();
-    let key = format!("{strict}:{host}:{port}:{public_dns}:{proxy}");
+    let key = client_key(strict, host, port, public_dns, proxy);
     {
         let cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
         if let Some(http) = cached_client(&cache, &key, Instant::now()) {
@@ -752,6 +790,101 @@ fn verdict(dns: &Value, tcp: &Value, http: &Value) -> (&'static str, String, Vec
     }
 }
 
+/* ───────────────────── 设置页：代理快照与连通性测试 ───────────────────── */
+
+/// 设置页「代理访问」要显示的当前状态。认证信息一律脱敏，绝不回传原始值。
+pub fn proxy_state() -> Value {
+    let mode = crate::proxy::mode();
+    let effective = match mode {
+        crate::proxy::Mode::Off => None,
+        crate::proxy::Mode::Custom => crate::proxy::custom_url(),
+        crate::proxy::Mode::System => proxy_override()
+            .or_else(|| std::env::var("HTTPS_PROXY").ok())
+            .or_else(|| std::env::var("HTTP_PROXY").ok())
+            .or_else(gnome_proxy),
+    };
+    json!({
+        "mode": mode.as_str(),
+        // 用户自己填的地址要能回填到输入框，所以这里返回原值
+        "url": crate::proxy::stored_url(),
+        "effective": effective.as_deref().map(redact_proxy),
+        "system_proxy": system_proxy_enabled(),
+        "env_proxy": env_proxy_set(),
+    })
+}
+
+/// 测试一条代理能不能把请求送到当前线路。
+///
+/// 探的是 `/api/videos?page=1&size=1` 而不是首页——首页 200 不代表接口可用
+/// （`.ai` 就是首页 200、`/api` 全 404），这一点与自动选线、线路体检同一判据。
+/// `mode` 为 `system` 时沿用 reqwest 的系统代理探测；`off` 时强制直连做基线对照。
+pub async fn test_proxy(mode: &str, url: &str) -> Value {
+    let target = format!("{}/api/videos?page=1&size=1", base().trim_end_matches('/'));
+    let parsed = match network_policy::parse_target(&target) {
+        Ok(u) => u,
+        Err(e) => return json!({ "ok": false, "ms": 0, "error": e }),
+    };
+    let mut builder = reqwest::Client::builder()
+        .user_agent(UA)
+        .timeout(Duration::from_secs(8))
+        .connect_timeout(Duration::from_secs(6))
+        .redirect(reqwest::redirect::Policy::none())
+        .gzip(true)
+        .brotli(true);
+    let mut via = "system".to_string();
+    match mode.trim() {
+        "off" => {
+            builder = builder.no_proxy();
+            via = "direct".into();
+        }
+        "custom" => match crate::proxy::normalize_proxy(url) {
+            Ok(proxy_url) => match reqwest::Proxy::all(&proxy_url) {
+                Ok(proxy) => {
+                    builder = builder.proxy(proxy);
+                    via = redact_proxy(&proxy_url);
+                }
+                Err(_) => {
+                    return json!({ "ok": false, "ms": 0, "error": "代理配置无效（已隐藏原始值）" })
+                }
+            },
+            Err(e) => return json!({ "ok": false, "ms": 0, "error": e }),
+        },
+        _ => {
+            if proxy_off() {
+                builder = builder.no_proxy();
+                via = "direct".into();
+            }
+        }
+    }
+    let client = match builder.build() {
+        Ok(c) => c,
+        Err(_) => return json!({ "ok": false, "ms": 0, "error": "无法创建 HTTP 客户端" }),
+    };
+    let started = Instant::now();
+    match client
+        .get(parsed)
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let status = r.status().as_u16();
+            json!({
+                "ok": status == 200,
+                "status": status,
+                "ms": started.elapsed().as_millis() as u64,
+                "via": via,
+            })
+        }
+        Err(e) => json!({
+            "ok": false,
+            "ms": started.elapsed().as_millis() as u64,
+            "error": err_text(&e),
+            "via": via,
+        }),
+    }
+}
+
 /// 网络自检：DNS / TCP / HTTP / 代理环境变量，用于远程定位「打不开」。
 ///
 /// 结论直接给在 `verdict` / `summary` / `advice` 里，用户复制出去就能看懂。
@@ -829,6 +962,9 @@ pub async fn diagnose() -> Value {
             "HGHUB_PROXY": proxy_override().map(|p| redact_proxy(&p)),
             "GNOME_PROXY": gnome_proxy().map(|p| redact_proxy(&p)),
             "system_proxy": system_proxy_enabled(),
+            // 设置页里选的代理模式与实际出口（已脱敏）
+            "app_proxy_mode": crate::proxy::mode().as_str(),
+            "app_proxy": crate::proxy::custom_url().map(|p| redact_proxy(&p)),
         },
         "runtime": {
             "os": std::env::consts::OS,
@@ -1155,7 +1291,7 @@ mod tests {
             .unwrap();
         refresh_client();
         CLIENTS.lock().unwrap().insert(
-            format!("{}:{host}:{port}:false", network_policy::strict_security()),
+            client_key(network_policy::strict_security(), host, port, false, false),
             (Instant::now() + CLIENT_TTL, Arc::new(failed_client)),
         );
         let (_, bytes) = fetch_bytes(&raw).await.expect("备用 DNS 应恢复真实媒体下载");

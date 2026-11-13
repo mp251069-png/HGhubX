@@ -12,6 +12,7 @@ mod media_dns;
 mod net;
 mod network_policy;
 mod playback_log;
+mod proxy;
 mod session;
 
 use api::Api;
@@ -187,6 +188,9 @@ pub fn run() {
             api::line_auto,
             api::line_try_main,
             api::line_health,
+            api::proxy_state,
+            api::proxy_set,
+            api::proxy_test,
             api::check_update,
             api::open_url,
             api::set_orientation,

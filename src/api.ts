@@ -198,6 +198,11 @@ export const api = {
   /* 线路体检：探一次 /api/videos，和自动选线同一判据 */
   lineHealth: () => call<LineHealth>("line_health"),
 
+  /* 代理访问：跟随系统 / 自定义 / 直连 */
+  proxyState: () => call<ProxyState>("proxy_state"),
+  proxySet: (mode: ProxyMode, url: string) => call<ProxyState>("proxy_set", { mode, url }),
+  proxyTest: (mode: ProxyMode, url: string) => call<ProxyProbe>("proxy_test", { mode, url }),
+
   /* 更新检查：对比 GitHub Release 的 tag */
   checkUpdate: () => call<UpdateInfo>("check_update"),
   openUrl: (url: string) => call<void>("open_url", { url }),
@@ -227,6 +232,21 @@ export type LineProbe = { url: string; ok: boolean; status?: number; ms: number;
 export type LineHealth = { base: string; ok: boolean; ms: number; status: number | null };
 /** 切换线路的结果（`custom` 表示新地址不是官方主站） */
 export type LineApply = { base: string; custom: boolean };
+
+/* ── 代理访问 ───────────────────────────────────────────── */
+
+/** `system` 跟随系统/环境变量，`custom` 用设置页填的地址，`off` 强制直连 */
+export type ProxyMode = "system" | "custom" | "off";
+export type ProxyState = {
+  mode: ProxyMode;
+  /** 用户填写的原始地址（非 custom 模式下也保留，便于再次启用） */
+  url: string;
+  /** 当前实际出口，已脱敏（不含账号密码） */
+  effective?: string | null;
+  system_proxy?: boolean;
+  env_proxy?: boolean;
+};
+export type ProxyProbe = { ok: boolean; status?: number | null; ms: number; error?: string; via?: string };
 
 /** 自动选线：只比 `.com` 与 `.ai` 两条，取通的那条、快的那条。 */
 export type LineAutoCandidate = {
