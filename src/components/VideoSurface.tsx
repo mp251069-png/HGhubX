@@ -42,6 +42,20 @@ type Props = {
 };
 
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
+function directHttpSource(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    const target = parsed.protocol === "hg:" || parsed.hostname === "hg.localhost"
+      ? parsed.searchParams.get("u")
+      : raw;
+    if (!target) return null;
+    const upstream = new URL(target);
+    return upstream.protocol === "http:" || upstream.protocol === "https:" ? target : null;
+  } catch {
+    return null;
+  }
+}
+
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
   { src, poster, autoPlay = true, active = true, diagnosticContext = {}, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
     onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onEnded, onError, onClick, className = "" },
@@ -49,12 +63,14 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const nativeDirectFallbackTriedRef = useRef(false);
   const recoverCountRef = useRef(0);
   const recoverTimerRef = useRef<number | null>(null);
   const nearEndFiredRef = useRef(false);
   const [ready, setReady] = useState(false);
   const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, active, resource: mediaResource(src) });
   const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay, src, trace });
+  const nativeDirectFallback = directHttpSource(src);
 
   const reportSize = (v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -96,6 +112,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     const video = videoRef.current;
     if (!video || !src) return;
     setReady(false);
+    nativeDirectFallbackTriedRef.current = false;
     nearEndFiredRef.current = false;
     recoverCountRef.current = 0;
     const onVideoResize = () => reportSize(video);
@@ -210,7 +227,24 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
 
   const handleVideoError = () => {
     if (hlsRef.current) return;
-    onError?.(mediaErrorMessage(videoRef.current?.error ?? null));
+    const video = videoRef.current;
+    const error = video?.error ?? null;
+    if (
+      platform === "ios" && error?.code === 4 && video && nativeDirectFallback &&
+      !nativeDirectFallbackTriedRef.current
+    ) {
+      nativeDirectFallbackTriedRef.current = true;
+      trace("source.ios_https_fallback", {
+        fallback_host: mediaHost(nativeDirectFallback),
+        fallback_resource: mediaResource(nativeDirectFallback),
+        media_error: error.code,
+      });
+      video.src = nativeDirectFallback;
+      video.load();
+      activity.play("ios_https_fallback", true);
+      return;
+    }
+    onError?.(mediaErrorMessage(error));
   };
 
   return (
