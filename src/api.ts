@@ -185,9 +185,11 @@ export const api = {
   collect: (id: number, on: boolean) => call<unknown>("api_collect", { id, on }),
   follow: (uid: number, on: boolean) => call<unknown>("api_follow", { uid, on }),
 
-  /* 线路（数据源）：固定线路写死在 Rust 侧，镜像线路从地址发布页拉、推荐镜像从发布入口页拉 */
+  /* 线路（数据源）：官方主站、自定义镜像，以及镜像地址探测 */
   lineState: () => call<LineState>("line_state"),
   lineSet: (url: string) => call<string>("line_set", { url }),
+  lineCustomSet: (url: string) => call<LineApply>("line_custom_set", { url }),
+  lineReset: () => call<LineApply>("line_reset"),
   lineMirrors: () => call<LineMirrors>("line_mirrors"),
   lineProbe: (urls: string[]) => call<LineProbe[]>("line_probe", { urls }),
   lineAuto: () => call<LineAuto>("line_auto"),
@@ -219,10 +221,12 @@ export type UpdateInfo = {
 /* ── 线路（数据源） ─────────────────────────────────────── */
 
 export type LineItem = { name?: string; url: string; host?: string };
-export type LineState = { base: string; default: string; fixed: LineItem[] };
+export type LineState = { base: string; default: string; fixed: LineItem[]; /** 当前线路是用户自定义的镜像 */ custom?: boolean };
 export type LineMirrors = { source: string; script?: string; items: LineItem[]; recommended_source?: string; recommended: LineItem[] };
 export type LineProbe = { url: string; ok: boolean; status?: number; ms: number; error?: string };
 export type LineHealth = { base: string; ok: boolean; ms: number; status: number | null };
+/** 切换线路的结果（`custom` 表示新地址不是官方主站） */
+export type LineApply = { base: string; custom: boolean };
 
 /** 自动选线：只比 `.com` 与 `.ai` 两条，取通的那条、快的那条。 */
 export type LineAutoCandidate = {

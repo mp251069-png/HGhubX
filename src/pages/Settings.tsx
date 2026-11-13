@@ -1,16 +1,31 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { api, APP_VERSION, hostOf, logLine, platform, type UpdateInfo } from "../api";
+import { api, APP_VERSION, hostOf, logLine, platform, type LineProbe, type LineState, type UpdateInfo } from "../api";
 import { useStore } from "../store";
 import { Modal, Toggle } from "../components/ui";
 import { copyPlaybackLog, initPlaybackLog, setPlaybackLog, tracePlayback, usePlaybackLog } from "../playbackDiagnostics";
 import { formatNetDiag, shortVerdict } from "../netDiagReport";
 import { copyText } from "../clipboard";
-import { IBack, IBoltF, IBroom, IChevR, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISettings, ISun, IVolMute } from "../icons";
+import { IBack, IBoltF, IBroom, IChevR, IGlobe, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISettings, ISun, IVolMute } from "../icons";
+
+/** 检测结果一行：可用 / 不可用 / 未检测。两个弹窗共用，避免两套措辞。 */
+function ProbeLine({ probe, busy, idle }: {
+  probe: { ok: boolean; ms: number; status?: number | null; error?: string } | null; busy: boolean; idle: string;
+}) {
+  const tone = busy || !probe ? "text-dim" : probe.ok ? "text-mint" : "text-danger";
+  const text = busy
+    ? "检测中…"
+    : !probe
+      ? idle
+      : probe.ok
+        ? `可用 · ${probe.ms}ms`
+        : probe.status ? `不可用 · HTTP ${probe.status}` : `不可用 · ${probe.error || "连接失败"}`;
+  return <div className={`text-[10.5px] mt-2 break-all leading-relaxed ${tone}`}>{text}</div>;
+}
 
 /* 独立设置页：线路 / 外观 / 播放 / 本地数据 / 清理缓存 / 网络诊断 / 关于
    入口：Windows 侧栏「设置」、Android「我的」右上角齿轮 */
 export default function Settings({ onBack, wide }: { onBack: () => void; wide: boolean }) {
-  const { theme, setTheme, favs, history, muteOnStartup, setMuteOnStartup, preferHevc, setPreferHevc, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity, toast } = useStore();
+  const { theme, setTheme, favs, history, muteOnStartup, setMuteOnStartup, preferHevc, setPreferHevc, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity, setUser, toast } = useStore();
   const [about, setAbout] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -24,7 +39,79 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
   const [diagReport, setDiagReport] = useState<string | null>(null);
   const [copyingReport, setCopyingReport] = useState(false);
 
+  /* 线路设置：当前线路 + 自定义镜像 */
+  const [line, setLine] = useState<LineState | null>(null);
+  const [lineOpen, setLineOpen] = useState(false);
+  const [lineInput, setLineInput] = useState("");
+  const [lineProbe, setLineProbe] = useState<LineProbe | null>(null);
+  const [lineBusy, setLineBusy] = useState<"" | "test" | "save" | "reset">("");
+
   useEffect(() => { void initPlaybackLog(); }, []);
+
+  /* 线路状态来自后端（落盘在应用数据目录），进页面读一次即可 */
+  useEffect(() => {
+    api.lineState().then(setLine).catch(() => { /* 离线也能用，保持「读取中」 */ });
+  }, []);
+
+  const openLine = () => {
+    setLineInput(line?.base ?? "");
+    setLineProbe(null);
+    setLineOpen(true);
+  };
+
+  const testLine = async () => {
+    const url = lineInput.trim();
+    if (!url) return;
+    setLineBusy("test");
+    setLineProbe(null);
+    try {
+      const [r] = await api.lineProbe([url]);
+      setLineProbe(r ?? { url, ok: false, ms: 0, error: "没有返回探测结果" });
+    } catch (e) {
+      setLineProbe({ url, ok: false, ms: 0, error: (e as Error).message || "检测失败" });
+    } finally {
+      setLineBusy("");
+    }
+  };
+
+  const applyLine = async () => {
+    const url = lineInput.trim();
+    if (!url) return;
+    setLineBusy("save");
+    try {
+      const next = await api.lineCustomSet(url);
+      tracePlayback("line.custom", { line: hostOf(next.base), custom: next.custom, ok: true });
+      setLine((s) => (s ? { ...s, base: next.base, custom: next.custom } : s));
+      // 会话按 origin 保存，换站后旧 token 在后端已清掉，界面同步退出登录
+      setUser(null);
+      setLineOpen(false);
+      toast(`线路已切换到 ${hostOf(next.base)}，需重新登录`, "ok");
+      window.dispatchEvent(new Event("hg:line-changed"));
+    } catch (e) {
+      tracePlayback("line.custom", { line: hostOf(url), ok: false, err: (e as Error).message });
+      toast((e as Error).message || "切换失败", "info");
+    } finally {
+      setLineBusy("");
+    }
+  };
+
+  const resetLine = async () => {
+    setLineBusy("reset");
+    try {
+      const next = await api.lineReset();
+      setLine((s) => (s ? { ...s, base: next.base, custom: next.custom } : s));
+      setLineInput(next.base);
+      setLineProbe(null);
+      setUser(null);
+      setLineOpen(false);
+      toast(`已恢复官方主站 ${hostOf(next.base)}`, "ok");
+      window.dispatchEvent(new Event("hg:line-changed"));
+    } catch (e) {
+      toast((e as Error).message || "恢复默认线路失败", "info");
+    } finally {
+      setLineBusy("");
+    }
+  };
 
   const checkUpdate = async () => {
     setChecking(true);
@@ -132,15 +219,21 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
             </button>
           </Section>
 
-          <Section title="网络">
-            <div className="flex items-center gap-3 px-3.5 py-3">
-              <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><IBoltF size={16} /></span>
+          <Section title="线路设置">
+            <button onClick={openLine} className="w-full flex items-center gap-3 px-3.5 py-3 text-left pressable">
+              <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><IGlobe size={16} /></span>
               <div className="flex-1 min-w-0">
-                <div className="text-[12.5px] text-on">播放源</div>
-                <div className="text-[10.5px] text-mut truncate">固定 huangguoai.com</div>
+                <div className="text-[12.5px] text-on">线路地址</div>
+                <div className="text-[10.5px] text-mut truncate">
+                  {line ? `${line.custom ? "自定义镜像" : "官方主站"} · ${hostOf(line.base)}` : "读取中…"}
+                </div>
               </div>
-              <span className="text-[10.5px] text-mint">已固定</span>
-            </div>
+              <span className={`text-[10.5px] shrink-0 ${line?.custom ? "text-primary" : "text-mint"}`}>{line ? (line.custom ? "自定义" : "默认") : "—"}</span>
+              <IChevR size={15} className="text-mut" />
+            </button>
+          </Section>
+
+          <Section title="网络">
             <div className="flex items-center gap-3 px-3.5 py-3">
               <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><ILockF size={15} /></span>
               <div className="flex-1 min-w-0">
@@ -250,6 +343,47 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
           <div className="text-center text-[10px] text-dim mt-5">HGhubX {APP_VERSION} · {platform === "android" ? "Android" : platform === "ios" ? "iOS" : platform === "macos" ? "macOS" : platform === "linux" ? "Linux" : "Windows"} 客户端</div>
         </div>
       </div>
+
+      <Modal open={lineOpen} onClose={() => setLineOpen(false)} width={430}>
+        <div className="p-5">
+          <div className="text-[14.5px] font-bold text-on">线路地址</div>
+          <p className="text-[11.5px] text-mut leading-relaxed mt-1.5">
+            默认走官方主站。镜像站点填根地址即可（<span className="text-on/80">https://</span> 开头，不带路径与参数）。
+            切换后身份按站点区分，需要重新登录。
+          </p>
+          <input
+            value={lineInput}
+            onChange={(e) => { setLineInput(e.target.value); setLineProbe(null); }}
+            placeholder="https://mirror.example.com"
+            inputMode="url" spellCheck={false} autoCapitalize="none" autoCorrect="off"
+            aria-label="线路地址"
+            className="w-full mt-3 h-10 px-3 rounded-(--r-sm) bg-s4 text-[12.5px] text-on placeholder-mut outline-none focus:ring-2 focus:ring-[var(--p-primary)]"
+          />
+          <div className="text-[10px] text-dim mt-1.5 break-all leading-relaxed">
+            当前：{line ? line.base : "读取中…"}
+            <br />
+            内网 / 局域网地址会被「严格安全模式」拦截；需要时先在该开关里切到兼容模式。
+          </div>
+          <ProbeLine probe={lineProbe} busy={lineBusy === "test"} idle="点击「检测」先确认这条线路能用" />
+          <div className="flex items-center gap-2 mt-4">
+            <button onClick={() => void testLine()} disabled={!!lineBusy || !lineInput.trim()}
+              className="h-9 px-3 rounded-(--r-ctl) bg-s4 text-[12px] text-on/80 pressable disabled:opacity-50">
+              {lineBusy === "test" ? "检测中…" : "检测"}
+            </button>
+            <div className="flex-1" />
+            {line?.custom && (
+              <button onClick={() => void resetLine()} disabled={!!lineBusy}
+                className="h-9 px-3 rounded-(--r-ctl) bg-s4 text-[12px] text-on/80 pressable disabled:opacity-50">
+                {lineBusy === "reset" ? "恢复中…" : "恢复默认"}
+              </button>
+            )}
+            <button onClick={() => void applyLine()} disabled={!!lineBusy || !lineInput.trim()}
+              className="h-9 px-4 rounded-(--r-ctl) bg-primary text-[12px] font-semibold text-on-primary pressable disabled:opacity-60">
+              {lineBusy === "save" ? "应用中…" : "保存并应用"}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={diagReport !== null} onClose={() => setDiagReport(null)} width={520}>
         <div className="p-5">

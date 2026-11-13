@@ -68,7 +68,7 @@ export default function LoginModal() {
         </button>
       </div>
       <p className="text-[10.5px] text-dim mt-3 leading-relaxed">
-        使用 HGhubX 账号登录。登录、注册仅支持固定线路；镜像线路请以游客浏览。
+        使用 HGhubX 账号登录。登录状态与当前线路绑定，切换线路后需要重新登录。
       </p>
     </div>
   );

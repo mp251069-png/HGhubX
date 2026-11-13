@@ -180,6 +180,8 @@ pub fn run() {
             api::net_diag,
             api::line_state,
             api::line_set,
+            api::line_custom_set,
+            api::line_reset,
             api::line_mirrors,
             api::line_probe,
             api::line_auto,

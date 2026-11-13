@@ -31,7 +31,7 @@ try {
       __TAURI_INTERNALS__: { async invoke(command, args = {}) {
         fixture.calls.push(command);
         if (command === "app_boot") return { strict_security: true, base: "https://fixture.invalid" };
-        if (command === "line_state") return { base: "https://fixture.invalid", fixed: [] };
+        if (command === "line_state") return { base: "https://fixture.invalid", fixed: [], custom: false };
         if (command === "playback_log_status") return { enabled: false, path: "playback.log", error: null };
         if (command === "playback_log_write" || command === "debug_log") return;
         if (command === "net_diag") {

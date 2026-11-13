@@ -36,8 +36,12 @@ use std::time::{Duration, Instant};
 /// 默认上游（固定线路 1）。
 pub const DEFAULT_BASE: &str = "https://huangguoai.com";
 
-/// 当前上游基址（不带结尾斜杠）。可在设置里切到固定线路 2 或镜像线路，运行时立即生效。
+/// 当前上游基址（不带结尾斜杠）。可在设置里换成自定义镜像，运行时立即生效。
 static BASE: Lazy<RwLock<String>> = Lazy::new(|| RwLock::new(DEFAULT_BASE.to_string()));
+/// 当前基址是不是用户自定义的镜像（≠ 官方主站）。
+static CUSTOM_LINE: AtomicBool = AtomicBool::new(false);
+/// `line.json` 的格式版本：2 起才带自定义镜像语义，旧文件按历史配置丢弃。
+const LINE_CONFIG_VERSION: u64 = 2;
 /// 线路配置落盘位置（应用数据目录/line.json），由 [`bind_base`] 在启动时绑定。
 static BASE_FILE: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
 
@@ -46,6 +50,11 @@ pub fn base() -> String {
     BASE.read()
         .map(|b| b.clone())
         .unwrap_or_else(|_| DEFAULT_BASE.to_string())
+}
+
+/// 当前线路是否为用户自定义的镜像站点。
+pub fn is_custom_line() -> bool {
+    CUSTOM_LINE.load(Ordering::Relaxed)
 }
 
 /// 线路必须是纯 HTTPS origin，不允许路径、认证、查询串或片段。
@@ -61,26 +70,49 @@ pub fn normalize_base(raw: &str) -> Option<String> {
     Some(parsed.origin().ascii_serialization())
 }
 
-/// 哪些 origin 允许携带凭据：两个固定入口，加上发布页推荐过、且当前可能作为线路的镜像。
+/// 哪些 origin 允许携带凭据：两个固定入口，加上发布页推荐过、且当前可能作为线路的镜像，
+/// 以及用户在设置里显式填写的自定义镜像。
 ///
 /// 国内网络连不上 `.com`，只能用镜像；镜像和主站是同一后端、同一个账号体系。
-/// 只认发布页真的给过的地址（见 [`crate::lines::is_trusted_mirror`]），
-/// 用户手填的任意域名依旧会被严格模式拦下。
+/// 自定义镜像在请求前会被严格模式的地址校验过一遍；token 本身又按 origin 存放
+/// （见 `session.rs`），换站即失效，不会跨站复用。
 pub fn trusted_auth_origin(origin: &str) -> bool {
     matches!(origin, "https://huangguoai.com" | "https://huangguoai.ai")
         || crate::lines::is_trusted_mirror(origin)
+        || (is_custom_line() && base() == origin)
 }
 
-/// 启动时绑定线路：唯一播放源固定为 huangguoai.com，不再恢复旧 line.json
-/// （升级前用户可能停在镜像），直接清掉旧配置，base 恒为 DEFAULT_BASE。
+/// 启动时绑定线路：恢复上次选择的自定义镜像（`line.json`）。
+///
+/// 只认带 `"v": 2` 标记的新格式。1.2.x 及更早留下的文件是「旧镜像」，1.3.0 起
+/// 官方源已固定，这类历史配置一律丢弃，避免升级后被带到一条可能已失效的镜像上。
+/// 文件缺失、损坏或地址已不合法时同样退回官方主站，不让坏配置锁死启动。
 pub fn bind_base(dir: &std::path::Path) {
     network_policy::bind_security(dir);
     let path = dir.join("line.json");
-    match std::fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => {}
+    let mut restored = DEFAULT_BASE.to_string();
+    let mut legacy = false;
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        match serde_json::from_str::<Value>(&text) {
+            Ok(v) if v.get("v").and_then(Value::as_u64) == Some(LINE_CONFIG_VERSION) => {
+                if let Some(next) = v.get("base").and_then(Value::as_str).and_then(normalize_base) {
+                    restored = next;
+                }
+            }
+            _ => legacy = true,
+        }
     }
+    if legacy {
+        let _ = std::fs::remove_file(&path);
+    }
+    let custom = restored != DEFAULT_BASE;
+    if custom {
+        crate::lines::remember_line(&restored);
+    }
+    if let Ok(mut cur) = BASE.write() {
+        *cur = restored;
+    }
+    CUSTOM_LINE.store(custom, Ordering::Relaxed);
     if let Ok(mut f) = BASE_FILE.write() {
         *f = Some(path);
     }
@@ -92,11 +124,16 @@ pub fn set_base(url: &str) -> Result<String, String> {
         .ok_or_else(|| "线路地址无效（需要纯 HTTPS 站点地址，禁止内网）".to_string())?;
     let previous = base();
     crate::lines::remember_line(&next);
+    let custom = next != DEFAULT_BASE;
+    CUSTOM_LINE.store(custom, Ordering::Relaxed);
     if let Ok(mut cur) = BASE.write() {
         *cur = next.clone();
     }
     if let Some(path) = BASE_FILE.read().ok().and_then(|p| p.clone()) {
-        let _ = std::fs::write(path, json!({ "base": next }).to_string());
+        let _ = std::fs::write(
+            path,
+            json!({ "v": LINE_CONFIG_VERSION, "base": next, "custom": custom }).to_string(),
+        );
     }
     if previous != next {
         crate::playback_log::record(
@@ -104,6 +141,7 @@ pub fn set_base(url: &str) -> Result<String, String> {
             json!({
                 "previous_host": url::Url::parse(&previous).ok().and_then(|u| u.host_str().map(str::to_owned)),
                 "line_host": url::Url::parse(&next).ok().and_then(|u| u.host_str().map(str::to_owned)),
+                "custom": custom,
             }),
         );
     }

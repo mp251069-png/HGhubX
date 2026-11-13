@@ -62,24 +62,53 @@ pub async fn line_state() -> Result<Value, String> {
     Ok(json!({
         "base": base(),
         "default": crate::net::DEFAULT_BASE,
+        "custom": crate::net::is_custom_line(),
         "fixed": crate::lines::fixed(),
     }))
 }
 
-/// 手动切换线路：唯一播放源固定为 huangguoai.com，只放行默认主站，其余拒绝。
+/// 手动切换线路：接受任意通过校验的 HTTPS 站点根地址（官方主站或镜像）。
 #[tauri::command]
 pub async fn line_set(state: State<'_, Api>, url: String) -> Result<String, String> {
-    let next = crate::net::normalize_base(&url)
-        .ok_or_else(|| "线路地址无效（需要纯 HTTPS 站点地址，禁止内网）".to_string())?;
-    if next != crate::net::DEFAULT_BASE {
-        return Err("唯一播放源已固定，不再支持切换线路".into());
-    }
+    let next = crate::net::normalize_base(&url).ok_or_else(line_address_error)?;
     let previous = base();
     let applied = crate::net::set_base(&next)?;
+    crate::net::refresh_client();
     if previous != applied {
+        // token 与 origin 绑定（session.json），换站后不能继续沿用。
         state.session.clear();
     }
     Ok(applied)
+}
+
+/// 线路地址的统一报错文案：说清「要什么」比说清「错在哪」更有用。
+fn line_address_error() -> String {
+    "线路地址无效：需要 HTTPS 站点根地址（例 https://mirror.example.com），不能带路径、参数或账号密码".into()
+}
+
+/// 自定义镜像：等价于 [`line_set`]，但返回结构带上 `custom`，设置页可直接渲染。
+#[tauri::command]
+pub async fn line_custom_set(state: State<'_, Api>, url: String) -> Result<Value, String> {
+    let next = crate::net::normalize_base(&url).ok_or_else(line_address_error)?;
+    let previous = base();
+    let applied = crate::net::set_base(&next)?;
+    crate::net::refresh_client();
+    if previous != applied {
+        state.session.clear();
+    }
+    Ok(json!({ "base": applied, "custom": crate::net::is_custom_line() }))
+}
+
+/// 恢复官方主站线路。
+#[tauri::command]
+pub async fn line_reset(state: State<'_, Api>) -> Result<Value, String> {
+    let previous = base();
+    let applied = crate::net::set_base(crate::net::DEFAULT_BASE)?;
+    crate::net::refresh_client();
+    if previous != applied {
+        state.session.clear();
+    }
+    Ok(json!({ "base": applied, "custom": crate::net::is_custom_line() }))
 }
 
 /// 从地址发布页抓镜像线路（只在用户点开「线路」时调用）。
