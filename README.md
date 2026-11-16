@@ -29,6 +29,15 @@ Windows / macOS / Linux / Android / iOS · iOS 圆角与玻璃材质 · 沉浸�
 > 包括打包出售、接入付费/会员/广告变现、作为收费产品或服务的一部分分发。
 > 个人学习、研究、自用与非营利使用不受限制，详见 [LICENSE](LICENSE)。
 
+## TVBox 源播放（实验功能）
+
+- 在「我的 → TVBox 源播放」导入 TVBox 配置 JSON/JSONC 或配置 URL，也可手动添加接口；支持 `sites` / `sources` 和 `urls` 多仓递归导入（最多 12 个配置地址、最多 4 层）。源列表保存在本机 WebView 存储中。
+- 当前可浏览分类、搜索影片、查看详情/多线路/剧集，并通过 HGhubX 自带的 HLS 与媒体代理播放。CMS `type=0` XML、`type=1` JSON、`type=4` Remote 直链播放可用；Remote 的播放地址通过 `play` / `flag` 请求解析。
+- 配置中的最多 5 个静态解析接口可尝试提取直接媒体 URL；不执行 Spider/JAR、JavaScript、任意脚本或网页播放器代码。`type=3` 项会保留在源列表中，但不能执行。
+- 播放需上游返回可直接访问的 HTTP(S) 媒体地址。DRM、自定义请求头/鉴权、依赖 parse/jx 的 Remote 返回、非标准网页播放器等不保证兼容。网络请求仍经过应用代理与严格安全策略；严格模式会拒绝环回/内网地址。
+- 适配界面与命令在 Tauri 多端共用；实际播放器能力仍取决于 Windows、macOS、Linux、Android、iOS 各自 WebView/原生媒体栈。此功能未经所有设备逐一验证。
+- TVBox 格式兼容参考来源与 MIT 许可见 [`ThirdPartyNotices/TVBox-Swift-MIT.txt`](ThirdPartyNotices/TVBox-Swift-MIT.txt)。本项目仍受 [PolyForm Noncommercial 1.0.0](LICENSE) 约束，功能不构成商业使用授权。
+
 ## 仿冒提醒
 
 > 🚫 **已发现的恶意修改版**：[`hichuv 仓库`](https://github.com/hichuv 仓库)
