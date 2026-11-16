@@ -121,125 +121,105 @@ export default function Search({ active, wide }: { active: boolean; wide: boolea
   const querying = submitted.length > 0;
 
   return (
-    <div className="ios-page absolute inset-0 bg-bg flex flex-col">
-      <div className="ios-page-heading shrink-0"><h1 className="ios-page-title">搜索</h1></div>
-      {/* 搜索栏 */}
-      <div className="shrink-0 px-4 pb-3 flex items-center gap-2.5" >
-        <Form className="ios-search-form flex-1 flex items-center gap-2"
+    <div className="ios-page hg-search-view absolute inset-0 bg-bg flex flex-col">
+      <header className="hg-search-top shrink-0">
+        <div className="hg-search-masthead">
+          <span className="hg-search-eyebrow"><span className="hg-live-dot" />HG HUB <i>／</i> DISCOVER</span>
+          <Button onClick={() => push({ kind: "ranks" })} aria-label="打开排行榜" className="hg-search-rank-link">
+            <ITrophy size={16} /><span>排行榜</span><IChevR size={14} />
+          </Button>
+        </div>
+        <h1 className="hg-search-title">搜一搜，<br /><span>找到下一部上头剧。</span></h1>
+        <p className="hg-search-subtitle">短剧、漫剧与新鲜话题，一搜即达</p>
+        <Form className="hg-search-form flex items-center"
           onSubmit={(e) => { e.preventDefault(); submit(q); }}>
-          <ISearch size={17} className="text-mut shrink-0" />
-          <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索短剧、帖子、题材…"
-            className="flex-1 min-w-0 bg-transparent text-[14px] text-on placeholder-dim outline-none" />
-          {q && <Button aria-label="关闭" type="button" onClick={() => { seqRef.current++; busy.current = false; setLoading(false); setQ(""); setSubmitted(""); setItems([]); setPosts([]); }} className="ios-icon-button ios-search-clear"><IClose size={16} /></Button>}
+          <ISearch size={19} className="hg-search-input-icon" />
+          <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="输入剧名、题材或关键词"
+            className="hg-search-input flex-1 min-w-0" />
+          {q && <Button aria-label="清空搜索" type="button" onClick={() => { seqRef.current++; busy.current = false; setLoading(false); setQ(""); setSubmitted(""); setItems([]); setPosts([]); }} className="hg-search-clear"><IClose size={15} /></Button>}
+          <Button type="submit" aria-label="开始搜索" className="hg-search-submit"><ISearch size={17} /><span>搜索</span></Button>
         </Form>
-        <Button onClick={() => push({ kind: "ranks" })} aria-label="排行榜"
-          variant="primary" className="ios-icon-button ios-search-shortcut">
-          <ITrophy size={19} />
-        </Button>
-      </div>
+      </header>
 
-      <div className="flex-1 scroll-y px-4 pb-24">
+      <div className="hg-search-content flex-1 scroll-y pb-28">
         {!querying ? (
           <>
-            <Surface role="region" aria-label="热搜榜" className="mt-1 rounded-(--r-md) bg-s2 p-3.5 a-rise">
-                <div className="flex items-center justify-between">
-                  <h2 className="flex items-center gap-1.5 text-[14px] font-semibold text-on/90"><IFireF size={15} className="text-primary" />热搜榜</h2>
-                  <Button onClick={() => void refreshHot()} disabled={hotLoading} aria-label="刷新热搜榜"
-                    className="flex items-center gap-1 px-2 text-[12px] text-mut pressable">
-                    {hotLoading ? <Loader className="w-3 h-3" /> : <IRefresh size={12} />}{hotLoading ? "刷新中" : "刷新"}
-                  </Button>
-                </div>
-                {hotError && <p role="status" className="mt-2 text-[12px] text-mut leading-relaxed">
-                  {hotVideos.length > 0 ? "刷新失败，保留上次榜单。" : "热搜榜暂不可用。"}{hotError}
-                </p>}
+            <section className="hg-search-section a-rise" aria-label="热搜榜">
+              <div className="hg-section-heading">
+                <div><span className="hg-section-kicker">TRENDING NOW</span><h2><IFireF size={17} />正在热搜</h2></div>
+                <Button onClick={() => void refreshHot()} disabled={hotLoading} aria-label="刷新热搜榜" className="hg-refresh-link">
+                  {hotLoading ? <Loader className="w-3.5 h-3.5" /> : <IRefresh size={14} />}{hotLoading ? "更新中" : "换一换"}
+                </Button>
+              </div>
+              <Surface role="region" aria-label="实时热搜影片" className="hg-hot-board">
                 {hotVideos.length > 0 ? (
-                  <ol className="ios-search-hot-grid mt-3" aria-busy={hotLoading}>
-                    {hotVideos.map((video, i) => (
-                      <li key={video.video_id} className="min-w-0">
-                        <Button aria-label={`播放 ${video.title}`} title={video.title} className="ios-search-hot-item"
-                          onClick={() => push({ kind: "feed", videoIds: hotVideos.map(item => item.video_id), index: i, title: "热搜榜" })}>
-                          <span aria-hidden="true" className={`ios-search-hot-rank ${i < 3 ? "text-primary" : "text-mut"}`}>{String(i + 1).padStart(2, "0")}</span>
-                          <span className="ios-search-hot-content">
-                            <span className="ios-search-hot-title">{video.title}</span>
-                            {video.plays && <span className="ios-search-hot-plays"><IPlayF size={10} />{video.plays}</span>}
-                          </span>
-                          <IChevR size={15} className="text-mut" />
-                        </Button>
-                      </li>
-                    ))}
-                  </ol>
-                ) : !hotError && <p role="status" className="mt-3 text-[12px] text-mut">{hotLoading ? "加载中…" : "暂无热搜影片"}</p>}
+                  <>
+                    <Button aria-label={`播放热搜第一名 ${hotVideos[0].title}`} className="hg-hot-feature"
+                      onClick={() => push({ kind: "feed", videoIds: hotVideos.map(item => item.video_id), index: 0, title: "热搜榜" })}>
+                      <span className="hg-hot-feature-copy"><span className="hg-hot-feature-label"><IFireF size={13} />今日热度 NO.01</span>
+                        <strong>{hotVideos[0].title}</strong><span className="hg-hot-feature-meta">{hotVideos[0].plays || "大家都在看"}</span></span>
+                      <span className="hg-hot-play"><IPlayF size={20} /></span>
+                    </Button>
+                    {hotVideos.length > 1 && <ol className="hg-hot-list" aria-busy={hotLoading}>
+                      {hotVideos.slice(1, 7).map((video, index) => (
+                        <li key={video.video_id}>
+                          <Button aria-label={`播放热搜第 ${index + 2} 名 ${video.title}`} title={video.title} className="hg-hot-row"
+                            onClick={() => push({ kind: "feed", videoIds: hotVideos.map(item => item.video_id), index: index + 1, title: "热搜榜" })}>
+                            <span className={`hg-hot-rank ${index < 2 ? "is-top" : ""}`}>{String(index + 2).padStart(2, "0")}</span>
+                            <span className="hg-hot-row-title">{video.title}</span>
+                            <span className="hg-hot-row-plays">{video.plays || "热度上升"}</span><IChevR size={14} />
+                          </Button>
+                        </li>
+                      ))}
+                    </ol>}
+                  </>
+                ) : <div className="hg-hot-empty" role="status">{hotLoading ? "正在获取实时热搜…" : hotError ? "热搜榜暂时不可用，稍后再试试。" : "暂时没有热搜影片"}</div>}
+                {hotError && hotVideos.length > 0 && <p role="status" className="hg-hot-note">刷新失败，仍为你保留上次榜单。</p>}
               </Surface>
+            </section>
 
             {searchHist.length > 0 && (
-              <div className="mt-1 a-rise">
-                <div className="flex items-center justify-between">
-                  <span className="text-[14px] font-bold text-on">搜索历史</span>
-                  <Button onClick={clearSearchHist} className="text-[12px] text-dim pressable">清空</Button>
+              <section className="hg-search-section hg-history-section a-rise">
+                <div className="hg-section-heading compact"><div><span className="hg-section-kicker">PICK UP WHERE YOU LEFT</span><h2>最近搜过</h2></div>
+                  <Button onClick={clearSearchHist} className="hg-clear-history">清空</Button></div>
+                <div className="hg-search-chips">
+                  {searchHist.map((h) => <Button key={h} onClick={() => { setQ(h); submit(h); }} className="hg-search-chip"><ISearch size={13} />{h}</Button>)}
                 </div>
-                <div className="flex flex-wrap gap-2 mt-2.5">
-                  {searchHist.map((h) => (
-                    <Button key={h} onClick={() => { setQ(h); submit(h); }} className="px-3.5 h-8 rounded-(--r-ctl) bg-s3 text-[13px] text-on/80 pressable">{h}</Button>
-                  ))}
-                </div>
-              </div>
+              </section>
             )}
 
-            <Surface className="mt-5 rounded-(--r-md) bg-s2 p-3.5 a-rise">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-[14px] font-semibold text-on/90"><IFireF size={15} className="text-primary" />热门题材</span>
-                <Button onClick={() => push({ kind: "ranks" })} className="text-[12px] text-primary font-semibold pressable">完整榜单 ›</Button>
+            <section className="hg-search-section hg-topics-section a-rise">
+              <div className="hg-section-heading compact"><div><span className="hg-section-kicker">PICK A MOOD</span><h2>热门题材</h2></div>
+                <Button onClick={() => push({ kind: "ranks" })} className="hg-more-link">看排行榜 <IChevR size={14} /></Button></div>
+              <div className="hg-topic-chips">
+                {HOT_TAGS.map((t, index) => <Button key={t} onClick={() => { setQ(t); submit(t); }} className={`hg-topic-chip topic-${index % 4}`}>{t}<IChevR size={12} /></Button>)}
               </div>
-              <div className="flex flex-wrap gap-2 mt-3">
-                {HOT_TAGS.map((t) => (
-                  <Button key={t} onClick={() => { setQ(t); submit(t); }}
-                    className="px-3 h-7 rounded-(--r-ctl) bg-s3 text-[13px] text-on/85 pressable">{t}</Button>
-                ))}
-              </div>
-            </Surface>
-
-            <div className="flex items-center justify-between mt-6 mb-2.5">
-              <span className="text-[14px] font-bold text-on">为你推荐</span>
-              <Button onClick={() => submit(HOT_TAGS[Math.floor(Math.random() * HOT_TAGS.length)])}
-                className="flex items-center gap-1 text-[12px] text-mut pressable"><IRefresh size={13} />换一批</Button>
-            </div>
-            <p className="text-[12px] text-dim leading-relaxed">
-              输入关键词后按回车搜索，也可以点上面的题材直接看片单。
-            </p>
+              <div className="hg-search-prompt"><span className="hg-prompt-mark"><ISearch size={15} /></span><span>还没想好看什么？<strong>点一个题材开始探索</strong></span>
+                <Button aria-label="随机推荐题材" onClick={() => submit(HOT_TAGS[Math.floor(Math.random() * HOT_TAGS.length)])}><IRefresh size={15} /></Button></div>
+            </section>
           </>
         ) : (
-          <>
-            <SegmentedControl className="mt-1 mb-3" aria-label="搜索结果类型" activeIndex={tab === "video" ? 0 : 1}>
-              {([["video", "视频"], ["post", "帖子"]] as const).map(([k, label]) => (
-                <Button aria-pressed={tab === k} key={k} onClick={() => changeTab(k)}>{label}</Button>
-              ))}
+          <section className="hg-search-results">
+            <div className="hg-results-topline"><span className="hg-section-kicker">SEARCH RESULTS</span><span>关键词 <strong>“{submitted}”</strong></span></div>
+            <SegmentedControl className="hg-results-tabs" aria-label="搜索结果类型" activeIndex={tab === "video" ? 0 : 1}>
+              {([["video", "视频"], ["post", "帖子"]] as const).map(([k, label]) => <Button aria-pressed={tab === k} key={k} onClick={() => changeTab(k)}>{label}</Button>)}
             </SegmentedControl>
-            <div className="text-[12px] text-mut mb-2.5">「{submitted}」共 <span className="text-primary font-bold">{tab === "video" ? items.length : posts.length}</span> 条结果</div>
+            <div className="hg-results-count">找到 <strong>{tab === "video" ? items.length : posts.length}</strong> 条内容</div>
             {(tab === "video" ? items.length : posts.length) ? (
               <>
-                {tab === "video" ? (
-                  <Masonry videos={items} wide={wide} onOpen={(v) => push({ kind: "feed", videoIds: items.map((x) => x.id), index: items.findIndex((x) => x.id === v.id), title: `搜索 · ${submitted}` })} />
-                ) : (
+                {tab === "video" ? <Masonry videos={items} wide={wide} onOpen={(v) => push({ kind: "feed", videoIds: items.map((x) => x.id), index: items.findIndex((x) => x.id === v.id), title: `搜索 · ${submitted}` })} /> : (
                   <div className={`ios-media-grid ${wide ? "is-wide" : ""}`}>
-                    {posts.map((post) => (
-                      <MediaCard key={post.id} title={post.title} cover={post.cover} subtitle={`${fmt(post.hot)} 次浏览`} onOpen={() => push({ kind: "post", id: post.id })} />
-                    ))}
+                    {posts.map((post) => <MediaCard key={post.id} title={post.title} cover={post.cover} subtitle={`${fmt(post.hot)} 次浏览`} onOpen={() => push({ kind: "post", id: post.id })} />)}
                   </div>
                 )}
-                <div className="flex justify-center py-4">
-                  {loading ? <Loader className="w-6 h-6 spinner" />
-                    : page < pages ? (
-                      <Button onClick={() => run(submitted, page + 1)} className="px-5 h-9 rounded-(--r-ctl) bg-s3 text-[13px] text-on/85 pressable">加载更多</Button>
-                    ) : <span className="text-[12px] text-dim">— 已经到底啦 —</span>}
-                </div>
+                <div className="flex justify-center py-5">{loading ? <Loader className="w-6 h-6 spinner" /> : page < pages ? (
+                  <Button onClick={() => run(submitted, page + 1)} className="hg-load-more">加载更多</Button>
+                ) : <span className="text-[12px] text-dim">— 已经到底啦 —</span>}</div>
               </>
-            ) : loading ? (
-              <div className="flex justify-center py-12"><Loader className="w-8 h-8 spinner" /></div>
-            ) : (
-              <Empty icon={<ISearch size={26} />} title={err || "没有找到相关内容"} sub="换个关键词试试，比如「都市」「逆袭」"
-                action="看看热榜" onAction={() => push({ kind: "ranks" })} />
+            ) : loading ? <div className="flex justify-center py-12"><Loader className="w-8 h-8 spinner" /></div> : (
+              <Empty icon={<ISearch size={26} />} title={err || "没有找到相关内容"} sub="换个关键词试试，比如「都市」「逆袭」" action="看看热榜" onAction={() => push({ kind: "ranks" })} />
             )}
-          </>
+          </section>
         )}
       </div>
     </div>

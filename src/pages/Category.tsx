@@ -8,7 +8,7 @@ import { MediaCard, Masonry, RowCard } from "../components/cards";
 import { CollectionLink, CollectionLinks } from "../components/CollectionLink";
 import { InplaceSearch } from "../components/InplaceSearch";
 import { Empty, Img } from "../components/ui";
-import { IBack, IChevR, IGlobe, IGrid, ISearch, ITrophy } from "../icons";
+import { IBack, IChevR, IClapper, IGlobe, IGrid, ISearch, ISparkF, IStarsF, ITrophy } from "../icons";
 
 export const CHANNELS = [
   { cate: "ai-duanju", name: "AI成人短剧", desc: "高能反转 · 一口气看完" },
@@ -81,83 +81,67 @@ export default function Category({ wide, active }: { wide: boolean; active: bool
   }, [lineEpoch, loadPreview]);
 
   return (
-    <div className="ios-page absolute inset-0 bg-bg flex flex-col">
-      <div className="ios-page-heading shrink-0 px-4">
-        <div className="flex items-end gap-2.5">
-          <span className="ios-page-title text-on">分类</span>
-          <span className="text-[12px] text-mut pb-0.5">{CHANNELS.length + 1} 个频道 · 每周持续上新</span>
+    <div className="ios-page hg-category-view absolute inset-0 bg-bg flex flex-col">
+      <header className="hg-category-top shrink-0">
+        <div className="hg-category-eyebrow"><span>HG HUB X</span><span>／</span><span>EXPLORE</span></div>
+        <div className="hg-category-heading">
+          <div><h1>分类</h1><p>从喜欢的频道，继续发现好故事</p></div>
+          <span className="hg-category-count"><strong>03</strong><small>精选频道</small></span>
         </div>
-      </div>
+        <div className="hg-category-hero">
+          <span className="hg-category-orbit orbit-one" /><span className="hg-category-orbit orbit-two" />
+          <span className="hg-category-hero-kicker"><ISparkF size={13} /> HG EDITION · 本周精选</span>
+          <strong>随心选，<br />尽情看。</strong>
+          <span className="hg-category-hero-copy">热门短剧、创意漫剧与独家原创<br />总有一个频道正合你意。</span>
+          <span className="hg-category-hero-stamp"><IClapper size={20} /><IStarsF size={18} /></span>
+        </div>
+      </header>
 
-      <div className="flex-1 scroll-y pb-24 pt-2">
-        {/* 排行榜入口：只在移动端显示（底部导航没有排行榜，桌面侧栏已有） */}
-        {!wide && (
-          <CollectionLink icon={<ITrophy size={18} />} title="排行榜" subtitle="热播榜 · 推荐榜 · 潜力榜"
-            onClick={() => push({ kind: "ranks" })} className="mx-4 mb-2.5 w-[calc(100%-2rem)]" />
-        )}
+      <div className="hg-category-content flex-1 scroll-y pb-28">
+        <section className="hg-discovery-shortcuts">
+          <div className="hg-section-heading compact"><div><span className="hg-section-kicker">YOUR NEXT STOP</span><h2>先从这里开始</h2></div></div>
+          <CollectionLinks className="hg-category-links">
+            <CollectionLink icon={<IGrid size={18} />} title="专题" subtitle="精选专辑合集" onClick={() => push({ kind: "topics" })} />
+            <CollectionLink icon={<IGlobe size={18} />} title="标签" subtitle="按题材找片" onClick={() => push({ kind: "tags" })} />
+          </CollectionLinks>
+          {!wide && <CollectionLink icon={<ITrophy size={18} />} title="排行榜" subtitle="热播榜 · 推荐榜 · 潜力榜"
+            onClick={() => push({ kind: "ranks" })} className="hg-category-rank-link" />}
+        </section>
 
-        {/* 专题 + 标签入口 */}
-        <CollectionLinks className="ios-category-links mx-4 mb-5">
-          <CollectionLink icon={<IGrid size={18} />} title="专题" subtitle="精选专辑合集"
-            onClick={() => push({ kind: "topics" })} />
-          <CollectionLink icon={<IGlobe size={18} />} title="标签" subtitle="按题材找片"
-            onClick={() => push({ kind: "tags" })} />
-        </CollectionLinks>
-
+        <div className="hg-channel-heading"><div><span className="hg-section-kicker">CHANNELS / 01—03</span><h2>频道精选</h2></div><span>每周上新</span></div>
         {CHANNELS.map((c, ci) => {
           const list = rows[c.cate] || [];
+          const Glyph = ci === 0 ? IClapper : ci === 1 ? IStarsF : ISparkF;
           return (
-            <section key={c.cate} aria-label={c.name} className="mb-5 a-rise" style={{ animationDelay: `${Math.min(ci * 50, 300)}ms` }}>
-              <Button onClick={() => push({ kind: "channel", cate: c.cate, name: c.name })}
-                className="w-full flex items-center gap-2.5 px-4 mb-2.5 text-left pressable group">
-                <span className="w-[36px] h-[36px] rounded-(--r-sm) tonal flex items-center justify-center shrink-0 text-primary">
-                  <IGrid size={19} strokeWidth={1.9} />
-                </span>
-                <span className="flex-1 min-w-0">
-                  <span className="block text-[15.5px] font-semibold text-on leading-tight">{c.name}</span>
-                  <span className="block text-[12px] text-mut mt-0.5 truncate">{c.desc}</span>
-                </span>
-                <span className="flex items-center gap-0.5 text-[12px] text-mut group-hover:text-primary transition-colors">
-                  全部<IChevR size={14} />
-                </span>
+            <section key={c.cate} aria-label={c.name} className={`hg-channel-section channel-${ci + 1} a-rise`} style={{ animationDelay: `${Math.min(ci * 50, 300)}ms` }}>
+              <Button onClick={() => push({ kind: "channel", cate: c.cate, name: c.name })} className="hg-channel-head group">
+                <span className="hg-channel-index">0{ci + 1}</span>
+                <span className="hg-channel-icon"><Glyph size={20} strokeWidth={1.8} /></span>
+                <span className="hg-channel-copy"><strong>{c.name}</strong><small>{c.desc}</small></span>
+                <span className="hg-channel-all">全部<IChevR size={14} /></span>
               </Button>
-              <div className="scroll-x flex gap-2.5 px-4 snap-x">
-                {list.map((v) => (
-                  <RowCard key={v.id} v={v} onOpen={() => push({ kind: "feed", videoIds: list.map((x) => x.id), index: list.findIndex((x) => x.id === v.id), title: c.name })} />
-                ))}
+              <div className="hg-channel-cards scroll-x flex gap-3 px-4 snap-x">
+                {list.map((v) => <RowCard key={v.id} v={v} onOpen={() => push({ kind: "feed", videoIds: list.map((x) => x.id), index: list.findIndex((x) => x.id === v.id), title: c.name })} />)}
                 {!list.length && <PreviewStatus name={c.name} loading={loading[c.cate] !== false} error={errors[c.cate]} onRetry={() => void loadPreview(c.cate)} />}
               </div>
             </section>
           );
         })}
 
-        {/* 吃瓜 */}
-        <section aria-label="吃瓜" className="mb-5 a-rise">
-          <Button onClick={() => push({ kind: "posts" })}
-            className="w-full flex items-center gap-2.5 px-4 mb-2.5 text-left pressable group">
-            <span className="w-[36px] h-[36px] rounded-(--r-sm) tonal flex items-center justify-center shrink-0 text-primary">
-              <IGrid size={19} strokeWidth={1.9} />
-            </span>
-            <span className="flex-1 min-w-0">
-              <span className="block text-[15.5px] font-semibold text-on leading-tight">吃瓜</span>
-              <span className="block text-[12px] text-mut mt-0.5 truncate">圈内爆料 · 每日更新</span>
-            </span>
-            <span className="flex items-center gap-0.5 text-[12px] text-mut group-hover:text-primary transition-colors">
-              全部<IChevR size={14} />
-            </span>
+        <section aria-label="吃瓜" className="hg-channel-section hg-news-section a-rise">
+          <Button onClick={() => push({ kind: "posts" })} className="hg-channel-head group">
+            <span className="hg-channel-index">04</span><span className="hg-channel-icon"><ISearch size={19} /></span>
+            <span className="hg-channel-copy"><strong>吃瓜</strong><small>圈内爆料 · 每日更新</small></span>
+            <span className="hg-channel-all">全部<IChevR size={14} /></span>
           </Button>
-          <div className="scroll-x flex gap-2.5 px-4 snap-x">
-            {posts.map((post) => (
-              <div key={post.id} className="ios-row-card"><MediaCard title={post.title} cover={post.cover}
-                subtitle={`${fmt(post.hot)} 次浏览`} onOpen={() => push({ kind: "post", id: post.id })} /></div>
-            ))}
+          <div className="hg-channel-cards scroll-x flex gap-3 px-4 snap-x">
+            {posts.map((post) => <div key={post.id} className="ios-row-card"><MediaCard title={post.title} cover={post.cover} subtitle={`${fmt(post.hot)} 次浏览`} onOpen={() => push({ kind: "post", id: post.id })} /></div>)}
             {!posts.length && <PreviewStatus name="吃瓜" loading={loading.posts !== false} error={errors.posts} onRetry={() => void loadPreview("posts")} />}
           </div>
         </section>
 
-        <div className="px-4 text-center text-[12px] text-dim pt-1">— 已展示全部频道 —</div>
+        <div className="hg-category-end"><span />你已抵达频道尽头<span /></div>
       </div>
-      {wide && <div />}
     </div>
   );
 }
