@@ -14,6 +14,7 @@ import Feed from "./components/Feed";
 import { PostsPage, PostDetail } from "./pages/Posts";
 import { TopicsPage, TopicPage, TagsPage, TagPage } from "./pages/Discover";
 import { FollowingPage, UserPage } from "./pages/User";
+import TvboxPage from "./pages/Tvbox";
 import LoginModal from "./components/LoginModal";
 import { ToastHost } from "./components/ui";
 import { DesktopRail, DesktopTitleBar } from "./components/DesktopChrome";
@@ -69,6 +70,7 @@ function StackPage({ page, onBack, wide, top, bottomInset }: {
   if (page.kind === "tag") return <TagPage tag={page.tag} name={page.name} onBack={onBack} wide={wide} />;
   if (page.kind === "following") return <FollowingPage onBack={onBack} wide={wide} />;
   if (page.kind === "user") return <UserPage id={page.id} name={page.name} onBack={onBack} wide={wide} />;
+  if (page.kind === "tvbox") return <TvboxPage onBack={onBack} wide={wide} />;
   return null;
 }
 
